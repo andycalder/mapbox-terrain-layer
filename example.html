@@ -25,13 +25,27 @@ var map = window.map = new mapboxgl.Map({
     center: [-122.957425, 50.059293],
     style: {
         "version": 8,
-        "sources": {},
+        "sources": {
+            'raster': {
+                'type': 'raster',
+                'url': 'mapbox://mapbox.satellite',
+                'tileSize': 128
+            },
+            'dem': {
+                'type': 'raster-dem',
+                'tiles': [
+                    'https://a.tiles.mapbox.com/v4/mapbox.terrain-rgb/{z}/{x}/{y}@2x.png?access_token=' + mapboxgl.accessToken,
+                    'https://b.tiles.mapbox.com/v4/mapbox.terrain-rgb/{z}/{x}/{y}@2x.png?access_token=' + mapboxgl.accessToken
+                ],
+                'maxzoom': 11
+            }
+        },
         "layers": []
     }
 });
 
 map.on('load', function() {
-    map.addLayer(new TerrainLayer());
+    map.addLayer(new TerrainLayer('raster', 'dem'));
 });
 
 console.log(map);
