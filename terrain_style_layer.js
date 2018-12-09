@@ -8,7 +8,6 @@ class TerrainLayer {
     
     onAdd(map, gl) {
         this.map = map;
-
         this.rasterSourceCache = map.style.sourceCaches[this.rasterSource];
         this.demSourceCache = map.style.sourceCaches[this.demSource];
         
@@ -35,6 +34,14 @@ class TerrainLayer {
         
         this.rasterSourceCache.pause();
         this.demSourceCache.pause();
+    }
+
+    getCenterElevation() {
+        const transform = this.map.transform;
+        const demZoom = this.demSourceCache.getZoom(transform);
+        console.log(demZoom);
+        this.pixelPoint = this.demSourceCache.transform.point;
+        this.tiley = this.pixelPoint.y / 512;
     }
 
     prepareBuffers(gl) {
@@ -89,7 +96,7 @@ class TerrainLayer {
         void main() {
             v_pos = vec2(a_pos / 8192.0);
             vec2 demCoord = (v_pos + u_offset) * u_scale * 0.5 + 0.25;
-            gl_Position = u_matrix * vec4(a_pos, getElevation(demCoord), 1.0);
+            gl_Position = u_matrix * vec4(a_pos, getElevation(demCoord) - 2200.0, 1.0);
         }`
 
         var fragmentSource = `
@@ -158,50 +165,45 @@ class TerrainLayer {
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
 
         this.update();
-
-        const demCoords = this.demSourceCache.getVisibleCoordinates().reverse();
+        this.getCenterElevation();
         
-        // Get visible raster coords and filter out the ones that have a loaded parent
-        let rasterCoords = this.rasterSourceCache.getVisibleCoordinates();
-        rasterCoords = rasterCoords.filter(coord => !this.rasterSourceCache.findLoadedParent(coord, 0));
+        let coords = this.rasterSourceCache.getVisibleCoordinates().reverse();
+        coords = coords.filter(coord => 
+            !this.rasterSourceCache.findLoadedParent(coord, 0)
+            && this.demSourceCache.findLoadedParent(coord, 0)
+        );
 
-        for (const demCoord of demCoords) {
-            // Get dem tile
-            const demTile = this.demSourceCache.getTile(demCoord);
+        for (const coord of coords) {
+            const rasterTile = this.rasterSourceCache.getTile(coord);
+            const demTile = this.demSourceCache.findLoadedParent(coord, 0);
 
-            // Bind dem texture to unit 0
+            // Bind raster texture to unit 0
             gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, rasterTile.texture.texture);
+            gl.uniform1i(gl.getUniformLocation(this.program, 'u_raster'), 0);
+
+            // Bind dem texture to unit 1
+            gl.activeTexture(gl.TEXTURE1);
             gl.bindTexture(gl.TEXTURE_2D, this.demTexture(gl, demTile));
-            gl.uniform1i(gl.getUniformLocation(this.program, 'u_dem'), 0);
+            gl.uniform1i(gl.getUniformLocation(this.program, 'u_dem'), 1);
+            
+            // Calculate dem texture offset
+            const deltaZoom = rasterTile.tileID.canonical.z - demTile.tileID.canonical.z;
+            const demScale = 1 / Math.pow(2, deltaZoom);
+            const xOffset = rasterTile.tileID.canonical.x - demTile.tileID.canonical.x / demScale;
+            const yOffset = rasterTile.tileID.canonical.y - demTile.tileID.canonical.y / demScale;
 
-            // Render raster tiles that are children of this tile
-            for (const rasterCoord of rasterCoords.filter(coord => coord.isChildOf(demCoord))) {
-                // Get raster tile
-                const rasterTile = this.rasterSourceCache.getTile(rasterCoord);
+            gl.uniform1f(gl.getUniformLocation(this.program, "u_scale"), demScale);
+            gl.uniform2f(gl.getUniformLocation(this.program, "u_offset"), xOffset, yOffset);
 
-                // Calculate dem texture offset
-                const deltaZoom = rasterTile.tileID.canonical.z - demTile.tileID.canonical.z;
-                const demScale = 1 / Math.pow(2, deltaZoom);
-                const xOffset = rasterTile.tileID.canonical.x - demTile.tileID.canonical.x / demScale;
-                const yOffset = rasterTile.tileID.canonical.y - demTile.tileID.canonical.y / demScale;
+            // Bind matrix
+            gl.uniformMatrix4fv(gl.getUniformLocation(this.program, "u_matrix"), false, coord.posMatrix);
 
-                gl.uniform1f(gl.getUniformLocation(this.program, "u_scale"), demScale);
-                gl.uniform2f(gl.getUniformLocation(this.program, "u_offset"), xOffset, yOffset);
-
-                // Bind matrix
-                gl.uniformMatrix4fv(gl.getUniformLocation(this.program, "u_matrix"), false, rasterCoord.posMatrix);
-
-                // Bind raster texture to unit 1
-                gl.activeTexture(gl.TEXTURE1);
-                gl.bindTexture(gl.TEXTURE_2D, rasterTile.texture.texture);
-                gl.uniform1i(gl.getUniformLocation(this.program, 'u_raster'), 1);
-
-                // Draw
-                const vertexCount = this.indexArray.length;
-                const type = gl.UNSIGNED_SHORT;
-                const offset = 0;
-                gl.drawElements(gl.TRIANGLES, vertexCount, type, offset);
-            }
+            // Draw
+            const vertexCount = this.indexArray.length;
+            const type = gl.UNSIGNED_SHORT;
+            const offset = 0;
+            gl.drawElements(gl.TRIANGLES, vertexCount, type, offset);
         }
     }
 }
